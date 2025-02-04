@@ -1,0 +1,29 @@
+{
+  "name": "frames",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "@coinbase/onchainkit": "^0.36.9",
+    "@farcaster/core": "^0.15.6",
+    "@frames.js/render": "^0.5.4",
+    "@types/node": "^22.13.1",
+    "@types/react": "^19.0.8",
+    "ethers": "^6.13.5",
+    "frames.js": "^0.21.2",
+    "next": "^15.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.3"
+  },
+  "devDependencies": {
+    "@types/react-dom": "^19.0.3",
+    "eslint-config-next": "^15.1.6"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  }
+}
