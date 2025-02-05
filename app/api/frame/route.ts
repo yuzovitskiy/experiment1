@@ -1,6 +1,8 @@
 import { NextRequest } from "next/server";
 import { getFrameHtml, getFrameMessage } from "frames.js";
 import { getContract } from "@/lib/contract";
+import { supabase } from '@/lib/supabase';
+
 // GET: Initial frame display
 export async function GET(req: NextRequest) {
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
@@ -20,14 +22,14 @@ export async function GET(req: NextRequest) {
         ${getFrameHtml({
           buttons: [
             {
-              label: "Mint NFT",
-              action: "post",
-              target: `${baseUrl}/api/frame`
+              label: "Start Minting Process",
+              action: "post"
             }
           ],
           image: `${baseUrl}/images/preview.png`,
           version: "vNext",
-          title: `Mint Your Cute Cow NFT (${contractAddress})`,
+          title: `Cute Cow NFT (${contractAddress})`,
+          inputText: "Enter your full name",
         })}
       </head>
     </html>`,
@@ -39,38 +41,58 @@ export async function GET(req: NextRequest) {
   );
 }
 
-// POST: Handle mint action
+// POST: Handle multi-step form and mint
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
   
   const frameMessage = await getFrameMessage(body);
   
-  // Debug logging
-  console.log("Frame Message:", {
-    fid: frameMessage?.requesterFid,
-    address: frameMessage?.address,
-    requesterVerifiedAddresses: frameMessage?.requesterVerifiedAddresses,
-    requesterCustodyAddress: frameMessage?.requesterCustodyAddress,
-    fullMessage: frameMessage
-  });
-
   if (!frameMessage) {
     return new Response("Invalid message", { status: 400 });
   }
 
+  // Get the input text if provided
+  const inputText = frameMessage.inputText || '';
+  const buttonIndex = frameMessage.buttonIndex || 0;
+
   try {
-    // Get user's verified Ethereum address
-    const userAddress = frameMessage.requesterVerifiedAddresses?.[0] || frameMessage.address;
-    if (!userAddress) {
-      throw new Error("No verified address found - please verify your address on Warpcast");
+    // Step 1: Name input
+    if (!frameMessage.inputText) {
+      return getFormResponse("Enter your full name", "Continue to shipping address", "Enter your full name");
     }
 
-    console.log("Minting to address:", userAddress);
+    // Step 2: Address input
+    if (!inputText.includes(',')) {
+      return getFormResponse(
+        "Enter shipping address", 
+        "Confirm and Mint", 
+        `Name: ${inputText}\nEnter your shipping address`
+      );
+    }
 
+    // Step 3: Confirmation and mint
+    const [name, address] = inputText.split(',').map(s => s.trim());
+    if (!name || !address) {
+      throw new Error("Invalid input format");
+    }
+
+    // Store shipping info
+    const { error: dbError } = await supabase
+      .from('shipping_info')
+      .insert({
+        wallet_address: address,
+        full_name: name,
+        shipping_address: address
+      });
+
+    if (dbError) {
+      throw new Error('Failed to store shipping information');
+    }
+    
     // Get contract and mint
     const contract = getContract();
-    const tx = await contract.mint(userAddress);
+    const tx = await contract.mint(address);
     await tx.wait();
 
     return new Response(
@@ -99,6 +121,7 @@ export async function POST(req: NextRequest) {
     );
   } catch (error) {
     console.error("Mint error:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     return new Response(
       `<!DOCTYPE html>
       <html>
@@ -113,7 +136,7 @@ export async function POST(req: NextRequest) {
             ],
             image: `${baseUrl}/images/error.png`,
             version: "vNext",
-            title: "Minting Failed",
+            title: "Error: " + errorMessage,
           })}
         </head>
       </html>`,
@@ -124,4 +147,31 @@ export async function POST(req: NextRequest) {
       }
     );
   }
+}
+
+function getFormResponse(title: string, buttonLabel: string, inputPrompt: string) {
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
+  
+  return new Response(
+    `<!DOCTYPE html>
+    <html>
+      <head>
+        ${getFrameHtml({
+          buttons: [
+            {
+              label: buttonLabel,
+              action: "post"
+            }
+          ],
+          image: `${baseUrl}/images/form.png`,
+          version: "vNext",
+          title: title,
+          inputText: inputPrompt,
+        })}
+      </head>
+    </html>`,
+    {
+      headers: { "Content-Type": "text/html" },
+    }
+  );
 }
