@@ -1,5 +1,5 @@
 export const abi = [
-"function mint(uint8 quantity) external",
+"function mint(address to) external",
   "function totalSupply() public view returns (uint16)",
   "function MAX_SUPPLY() public view returns (uint16)",
   "function MAX_PER_WALLET() public view returns (uint8)",
