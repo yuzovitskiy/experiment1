@@ -2,7 +2,8 @@ import { NextRequest } from "next/server";
 import { getFrameHtml, getFrameMessage } from "frames.js";
 import { getContract } from "@/lib/contract";
 import { supabase } from '@/lib/supabase';
-import sharp from 'sharp';
+
+const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
 
 // Add function to validate address using Google Places API
 async function validateAddress(address: string) {
@@ -67,145 +68,68 @@ async function createAddressPreview(address: string) {
 
 // GET: Initial frame display
 export async function GET(req: NextRequest) {
-  try {
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
-    if (!baseUrl) {
-      throw new Error('Missing NEXT_PUBLIC_BASE_URL');
-    }
-    
-    return new Response(
-      `<!DOCTYPE html>
-      <html>
-        <head>
-          <meta property="fc:frame" content="vNext" />
-          <meta property="fc:frame:image" content="${baseUrl}/images/preview.png" />
-          <meta property="fc:frame:button:1" content="Start" />
-          <meta property="fc:frame:input:text" content="Enter your shipping address" />
-          <meta property="og:image" content="${baseUrl}/images/preview.png" />
-          <title>Enter shipping address</title>
-        </head>
-        <body>
-          <h1>Farcaster Frame</h1>
-          <p>Please view this frame on Warpcast.</p>
-        </body>
-      </html>`,
-      {
-        headers: { 
-          "Content-Type": "text/html",
-          "Cache-Control": "no-store"
-        }
-      }
-    );
-  } catch (error) {
-    console.error('GET Error:', error);
-    return new Response('Error loading frame', { status: 500 });
-  }
+  // Initial frame showing category selection
+  return new Response(
+    `<!DOCTYPE html><html><head>${getFrameHtml({
+      buttons: [
+        { label: "🥩 Steak", action: "post" },
+        { label: "🍷 Wine", action: "post" },
+        { label: "🔪 Knife", action: "post" }
+      ],
+      image: `${baseUrl}/images/categories.png`,
+      version: "vNext",
+      title: "Select your free gift:"
+    })}</head></html>`,
+    { headers: { "Content-Type": "text/html" }}
+  );
 }
 
 export async function POST(req: NextRequest) {
-    console.log('=== START REQUEST ===');
+  try {
+    const body = await req.json();
+    const frameMessage = await getFrameMessage(body);
     
-    try {
-      const body = await req.json();
-      console.log('Raw body:', JSON.stringify(body, null, 2));
-      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
-  
-      // Check for vNext protocol
-      if (body.clientProtocol === "farcaster@vNext") {
-        return new Response(
-          `<!DOCTYPE html><html><head>${getFrameHtml({
-            buttons: [{ label: "Submit", action: "post" }],
-            image: `${baseUrl}/images/preview.png`,
-            version: "vNext",
-            title: "Enter shipping address",
-            inputText: "Your shipping address"
-          })}</head></html>`,
-          { headers: { "Content-Type": "text/html" }}
-        );
-      }
-  
-      const frameMessage = await getFrameMessage(body);
-      console.log('Frame message:', frameMessage);
-  
+    const userAddress = frameMessage.requesterVerifiedAddresses?.[0];
+    const userName = frameMessage.requesterUserData?.displayName;
+
+    if (!userAddress) {
+      throw new Error('No verified address found');
+    }
+
+    // If no state, this is initial category selection
+    if (!frameMessage.state) {
+      const categories = ["Steak", "Wine", "Knife"];
+      const selectedCategory = categories[frameMessage.buttonIndex - 1];
+
+      // Ask for shipping address
+      return new Response(
+        `<!DOCTYPE html><html><head>${getFrameHtml({
+          buttons: [{ label: "Submit", action: "post" }],
+          image: await createAddressPreview("Enter your shipping address"),
+          version: "vNext",
+          title: "Enter shipping address for your " + selectedCategory,
+          inputText: "Your shipping address",
+          state: `CATEGORY:${selectedCategory}`
+        })}</head></html>`,
+        { headers: { "Content-Type": "text/html" }}
+      );
+    }
+
+    // Handle address input after category selection
+    if (frameMessage.state.startsWith('CATEGORY:')) {
+      const [_, selectedCategory] = frameMessage.state.split('CATEGORY:');
       const inputAddress = frameMessage.inputText;
-      const userAddress = frameMessage.requesterVerifiedAddresses?.[0];
-      const userName = frameMessage.requesterUserData?.displayName;
-  
-      if (!userAddress) {
-        throw new Error('No verified address found');
-      }
 
-      // If we have a state, it means user is confirming the address
-      if (frameMessage.state) {
-        // Check which button was clicked
-        if (frameMessage.buttonIndex === 1) {  // Confirm & Mint
-          // Store in Supabase
-          const { error: dbError } = await supabase
-            .from('shipping_info')
-            .insert([{ 
-              user_name: userName,
-              shipping_address: frameMessage.state,
-              wallet_address: userAddress,
-              fid: frameMessage.requesterFid
-            }]);
-
-          if (dbError) {
-            console.error('Supabase Error:', dbError);
-            throw new Error('Failed to store shipping information');
-          }
-
-          // Mint NFT
-          const contract = getContract();
-          const tx = await contract.mint(userAddress);
-          await tx.wait();
-
-          return new Response(
-            `<!DOCTYPE html><html><head>${getFrameHtml({
-              buttons: [{ 
-                label: "View Transaction",
-                action: "link",
-                target: `https://basescan.org/tx/${tx.hash}`
-              }],
-              image: `${baseUrl}/images/success.png`,
-              version: "vNext",
-              title: "NFT Minted Successfully! 🎉"
-            })}</head></html>`,
-            { headers: { "Content-Type": "text/html" }}
-          );
-        } else {  // Try Again
-          return new Response(
-            `<!DOCTYPE html><html><head>${getFrameHtml({
-              buttons: [{ label: "Submit", action: "post" }],
-              image: `${baseUrl}/images/preview.png`,
-              version: "vNext",
-              title: "Enter shipping address",
-              inputText: "Your shipping address"
-            })}</head></html>`,
-            { headers: { "Content-Type": "text/html" }}
-          );
-        }
-      }
-
-      // Initial address validation
       if (!inputAddress) {
         throw new Error('No address provided');
       }
-      
+
       const { isValid, formattedAddress } = await validateAddress(inputAddress);
-      
+
       if (!isValid) {
-        return new Response(
-          `<!DOCTYPE html><html><head>${getFrameHtml({
-            buttons: [{ label: "Try Again", action: "post" }],
-            image: `${baseUrl}/images/preview.png`,
-            version: "vNext",
-            title: "Invalid address. Please enter a valid shipping address.",
-            inputText: "Your shipping address"
-          })}</head></html>`,
-          { headers: { "Content-Type": "text/html" }}
-        );
+        throw new Error('Invalid address');
       }
-  
+
       // Show formatted address and ask for confirmation
       return new Response(
         `<!DOCTYPE html><html><head>${getFrameHtml({
@@ -213,26 +137,70 @@ export async function POST(req: NextRequest) {
             { label: "Confirm & Mint", action: "post" },
             { label: "Try Again", action: "post" }
           ],
-          image: await createAddressPreview(formattedAddress),  
+          image: await createAddressPreview(formattedAddress),
           version: "vNext",
           title: "Please confirm your shipping address",
-          state: formattedAddress
-        })}</head></html>`,
-        { headers: { "Content-Type": "text/html" }}
-      );
-  
-    } catch (error) {
-      console.error('=== ERROR ===');
-      console.error(error);
-      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
-      return new Response(
-        `<!DOCTYPE html><html><head>${getFrameHtml({
-          buttons: [{ label: "Try Again", action: "post" }],
-          image: `${baseUrl}/images/error.png`,
-          version: "vNext",
-          title: "Error: Please try again"
+          state: `CONFIRM:${selectedCategory}:${formattedAddress}`
         })}</head></html>`,
         { headers: { "Content-Type": "text/html" }}
       );
     }
+
+    // Handle address confirmation
+    if (frameMessage.state.startsWith('CONFIRM:')) {
+      const [_, selectedCategory, formattedAddress] = frameMessage.state.split(':');
+      
+      if (frameMessage.buttonIndex === 1) {  // Confirm
+        // Store in Supabase
+        const { error: dbError } = await supabase
+          .from('shipping_info')
+          .insert([{ 
+            user_name: userName,
+            shipping_address: formattedAddress,
+            wallet_address: userAddress,
+            fid: frameMessage.requesterFid,
+            selected_category: selectedCategory
+          }]);
+
+        if (dbError) {
+          throw new Error('Failed to store information');
+        }
+
+        // Show success message
+        return new Response(
+          `<!DOCTYPE html><html><head>${getFrameHtml({
+            buttons: [{ label: "Done", action: "post" }],
+            image: `${baseUrl}/images/success.png`,
+            version: "vNext",
+            title: `Thanks! Your ${selectedCategory} will be shipped to ${formattedAddress}`
+          })}</head></html>`,
+          { headers: { "Content-Type": "text/html" }}
+        );
+      } else {  // Try Again
+        return new Response(
+          `<!DOCTYPE html><html><head>${getFrameHtml({
+            buttons: [{ label: "Submit", action: "post" }],
+            image: `${baseUrl}/images/preview.png`,
+            version: "vNext",
+            title: "Enter shipping address for your " + selectedCategory,
+            inputText: "Your shipping address",
+            state: `CATEGORY:${selectedCategory}`
+          })}</head></html>`,
+          { headers: { "Content-Type": "text/html" }}
+        );
+      }
+    }
+  } catch (error) {
+    console.error('=== ERROR ===');
+    console.error(error);
+    return new Response(
+      `<!DOCTYPE html><html><head>${getFrameHtml({
+        buttons: [{ label: "Try Again", action: "post" }],
+        image: `${baseUrl}/images/error.png`,
+        version: "vNext",
+        title: "Error: Please try again"
+      })}</head></html>`,
+      { headers: { "Content-Type": "text/html" }}
+    );
   }
+}
