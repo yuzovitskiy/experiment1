@@ -166,10 +166,18 @@ export async function POST(req: NextRequest) {
           throw new Error('Failed to store information');
         }
 
-        // Show success message
+        // Show success message with share button
+        const shareText = `I just participated in a Mint Drop: Mint Online, Receive IRL. Getting a free ${selectedCategory} shipped to me. 🎁`;
+        
         return new Response(
           `<!DOCTYPE html><html><head>${getFrameHtml({
-            buttons: [{ label: "Done", action: "post" }],
+            buttons: [
+              { 
+                label: "🔁 Share", 
+                action: "link",  // Changed to "link" instead of "post_redirect"
+                target: `https://warpcast.com/~/compose?text=${encodeURIComponent(shareText)}`  // Using target instead of postUrl
+              }
+            ],
             image: `${baseUrl}/images/success.png`,
             version: "vNext",
             title: `Thanks! Your ${selectedCategory} will be shipped to ${formattedAddress}`
