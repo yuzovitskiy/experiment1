@@ -66,38 +66,130 @@ async function createAddressPreview(address: string) {
   return `data:image/svg+xml;base64,${base64Svg}`;
 }
 
-// GET: Initial frame display
+async function createIntroPreview(count: number) {
+  console.log('Creating preview with count:', count);
+  // Add multiple random elements to force cache busting
+  const timestamp = Date.now();
+  const randomId = Math.random().toString(36).substring(7);
+  const randomColor = `#${Math.floor(Math.random()*16777215).toString(16)}`;
+  
+  const svg = `
+    <svg width="1200" height="630" xmlns="http://www.w3.org/2000/svg">
+      <rect width="1200" height="630" fill="white"/>
+      <rect x="0" y="0" width="2" height="2" fill="${randomColor}" opacity="0.01"/>
+      <text 
+        x="600" 
+        y="250" 
+        font-family="sans-serif"
+        font-size="48" 
+        text-anchor="middle" 
+        fill="black"
+      >Mint Drop</text>
+      <text 
+        x="600" 
+        y="350" 
+        font-family="sans-serif"
+        font-size="40" 
+        text-anchor="middle" 
+        fill="black"
+      >Mint online, receive IRL</text>
+      <text 
+        x="600" 
+        y="450" 
+        font-family="sans-serif"
+        font-size="36" 
+        text-anchor="middle" 
+        fill="black"
+        style="filter: url(#shadow)"
+      >${count}/100 Minted</text>
+      <defs>
+        <filter id="shadow">
+          <feDropShadow dx="0" dy="0" stdDeviation="0.2" flood-opacity="0.1"/>
+        </filter>
+      </defs>
+      <!-- Multiple unique identifiers to prevent caching -->
+      <text x="0" y="0" opacity="0">${timestamp}</text>
+      <text x="1" y="1" opacity="0">${randomId}</text>
+      <text x="2" y="2" opacity="0">${count}</text>
+    </svg>
+  `;
+
+  const base64Svg = Buffer.from(svg).toString('base64');
+  return `data:image/svg+xml;base64,${base64Svg}`;
+}
+
+// Helper function to get current mint count
+async function getMintCount() {
+  const { count } = await supabase
+    .from('shipping_info')
+    .select('*', { count: 'exact', head: true })  // Added head: true for efficiency
+    .throwOnError();  // This will help catch any DB errors
+  console.log('Fetched count from DB:', count);  // Debug log
+  return count || 0;
+}
+
+// GET: Initial frame with mint count
 export async function GET(req: NextRequest) {
-  // Initial frame showing category selection
+  const count = await getMintCount();
+  const timestamp = Date.now();
+  console.log('Initial frame count:', count);
+
   return new Response(
     `<!DOCTYPE html><html><head>${getFrameHtml({
-      buttons: [
-        { label: "🥩 Steak", action: "post" },
-        { label: "🍷 Wine", action: "post" },
-        { label: "🔪 Knife", action: "post" }
-      ],
-      image: `${baseUrl}/images/categories.png`,
+      buttons: [{ label: "Get Started", action: "post" }],
+      image: await createIntroPreview(count),
       version: "vNext",
-      title: "Select your free gift:"
+      title: "Mint Drop",
+      postUrl: `${baseUrl}/api/frame?t=${timestamp}&count=${count}`,
+      state: "INTRO"
     })}</head></html>`,
-    { headers: { "Content-Type": "text/html" }}
+    { 
+      headers: { 
+        "Content-Type": "text/html", 
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0"
+      }
+    }
   );
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const frameMessage = await getFrameMessage(body);
-    
-    const userAddress = frameMessage.requesterVerifiedAddresses?.[0];
-    const userName = frameMessage.requesterUserData?.displayName;
+    console.log('=== START REQUEST ===');
+    console.log('Raw body:', body);
 
-    if (!userAddress) {
-      throw new Error('No verified address found');
+    const frameMessage = await getFrameMessage(body);
+    console.log('Frame message:', frameMessage);
+    
+    const userAddress = frameMessage.requesterVerifiedAddresses?.[0] || frameMessage.requesterCustodyAddress;
+    const userName = frameMessage.requesterUserData?.displayName || 'Anonymous';
+
+    console.log('Current State:', frameMessage.state); // Debug log
+
+    // Handle intro screen "Get Started" button
+    if (!frameMessage.state || frameMessage.state === "") {
+      const count = await getMintCount();  // Get fresh count
+      console.log('Showing categories after intro with count:', count); // Debug log
+      return new Response(
+        `<!DOCTYPE html><html><head>${getFrameHtml({
+          buttons: [
+            { label: "🥩 Steak", action: "post" },
+            { label: "🍷 Wine", action: "post" },
+            { label: "🔪 Knife", action: "post" }
+          ],
+          image: `${baseUrl}/images/categories.png`,  // Make sure this matches your categories image
+          version: "vNext",
+          title: "Select your free gift:",
+          state: "CATEGORIES"
+        })}</head></html>`,
+        { headers: { "Content-Type": "text/html" }}
+      );
     }
 
-    // If no state, this is initial category selection
-    if (!frameMessage.state) {
+    // Handle category selection
+    if (frameMessage.state === "CATEGORIES") {
       const categories = ["Steak", "Wine", "Knife"];
       const selectedCategory = categories[frameMessage.buttonIndex - 1];
 
@@ -116,7 +208,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Handle address input after category selection
-    if (frameMessage.state.startsWith('CATEGORY:')) {
+    if (frameMessage.state && frameMessage.state.startsWith('CATEGORY:')) {
       const [_, selectedCategory] = frameMessage.state.split('CATEGORY:');
       const inputAddress = frameMessage.inputText;
 
@@ -147,7 +239,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Handle address confirmation
-    if (frameMessage.state.startsWith('CONFIRM:')) {
+    if (frameMessage.state && frameMessage.state.startsWith('CONFIRM:')) {
       const [_, selectedCategory, formattedAddress] = frameMessage.state.split(':');
       
       if (frameMessage.buttonIndex === 1) {  // Confirm
@@ -166,6 +258,9 @@ export async function POST(req: NextRequest) {
           throw new Error('Failed to store information');
         }
 
+        // Get updated count after mint
+        const updatedCount = await getMintCount();
+        
         // Show success message with share button
         const shareText = `I just participated in a Mint Drop: Mint Online, Receive IRL. Getting a free ${selectedCategory} shipped to me. 🎁`;
         
@@ -178,7 +273,7 @@ export async function POST(req: NextRequest) {
                 target: `https://warpcast.com/~/compose?text=${encodeURIComponent(shareText)}`  // Using target instead of postUrl
               }
             ],
-            image: `${baseUrl}/images/success.png`,
+            image: await createIntroPreview(updatedCount),  // Show updated count
             version: "vNext",
             title: `Thanks! Your ${selectedCategory} will be shipped to ${formattedAddress}`
           })}</head></html>`,
